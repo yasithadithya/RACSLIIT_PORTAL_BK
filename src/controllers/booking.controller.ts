@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 import Booking from '../models/Booking';
 import { AuthRequest } from '../middlewares/auth.middleware';
-import { createBookingSchema, updateBookingStatusSchema, paginationSchema } from '../validation/schemas';
+import { createBookingSchema, updateBookingStatusSchema, paginationSchema, getBookingsQuerySchema } from '../validation/schemas';
+import { notifyUser } from '../services/notification.service';
 import { z } from 'zod';
 
 export const createBooking = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -40,7 +41,7 @@ export const createBooking = async (req: AuthRequest, res: Response): Promise<vo
 export const getBookings = async (req: Request, res: Response): Promise<void> => {
   try {
     const { page, limit, sort } = paginationSchema.parse(req.query);
-    const { venue, status } = req.query;
+    const { venue, status } = getBookingsQuerySchema.parse(req.query);
 
     const filter: any = {};
     if (venue) filter.venue = venue;
@@ -112,13 +113,14 @@ export const updateBookingStatus = async (req: AuthRequest, res: Response): Prom
     const io = req.app.get('io');
     if (io) {
       io.emit('bookingUpdated', { bookingId: booking._id, status });
-      io.emit('notification', {
-        userId: booking.requestedBy,
-        type: 'booking_status',
-        message: `Your booking for ${booking.venue} was ${status}.`,
-        link: '/venue-booking'
-      });
     }
+
+    await notifyUser(req.app, {
+      userId: booking.requestedBy,
+      type: 'booking_status',
+      message: `Your booking for ${booking.venue} was ${status}.`,
+      relatedEntity: booking._id as any,
+    });
 
     res.json(booking);
   } catch (error) {
@@ -140,7 +142,14 @@ export const deleteBooking = async (req: AuthRequest, res: Response): Promise<vo
       return;
     }
 
-    if (booking.requestedBy.toString() !== req.user?._id.toString() && !(req.user as any)?.role?.permissions?.some((p: any) => p.resource === 'events' && p.action === 'approve')) {
+    const role: any = req.user?.roleId;
+    const hasApprovePermission = role?.permissions?.some(
+      (p: any) =>
+        (p.resource === 'all' && p.actions.includes('*')) ||
+        (p.resource === 'events' && (p.actions.includes('*') || p.actions.includes('approve')))
+    );
+
+    if (booking.requestedBy.toString() !== req.user?._id.toString() && !hasApprovePermission) {
       res.status(403).json({ message: 'Not authorized to delete this booking' });
       return;
     }

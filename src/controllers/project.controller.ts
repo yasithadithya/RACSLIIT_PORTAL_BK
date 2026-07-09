@@ -1,8 +1,19 @@
 import { Request, Response } from 'express';
 import Project from '../models/Project';
 import { AuthRequest } from '../middlewares/auth.middleware';
-import { createProjectSchema, updateProjectSchema, updateProjectStatusSchema, paginationSchema } from '../validation/schemas';
+import { createProjectSchema, updateProjectSchema, updateProjectStatusSchema, paginationSchema, getProjectsQuerySchema } from '../validation/schemas';
+import { notifyUser } from '../services/notification.service';
 import { z } from 'zod';
+
+const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
+  proposed: ['approved', 'rejected', 'cancelled'],
+  approved: ['ongoing', 'rejected', 'cancelled'],
+  ongoing: ['completed', 'cancelled'],
+  completed: ['reported'],
+  reported: [],
+  rejected: [],
+  cancelled: [],
+};
 
 export const createProject = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -40,8 +51,8 @@ export const createProject = async (req: AuthRequest, res: Response): Promise<vo
 export const getProjects = async (req: Request, res: Response): Promise<void> => {
   try {
     const { page, limit, sort } = paginationSchema.parse(req.query);
-    const { status, avenue, search } = req.query;
-    
+    const { status, avenue, search } = getProjectsQuerySchema.parse(req.query);
+
     // RBAC: Check if the user is scoped to a specific avenue for viewing
     const scopedAvenue = (req as any).scopedAvenue;
 
@@ -189,6 +200,14 @@ export const updateProjectStatus = async (req: AuthRequest, res: Response): Prom
       return;
     }
 
+    const allowedNextStatuses = VALID_STATUS_TRANSITIONS[project.status] || [];
+    if (!allowedNextStatuses.includes(status)) {
+      res.status(400).json({
+        message: `Invalid status transition from '${project.status}' to '${status}'`,
+      });
+      return;
+    }
+
     project.status = status as any;
     project.statusHistory.push({
       status: status as any,
@@ -203,6 +222,20 @@ export const updateProjectStatus = async (req: AuthRequest, res: Response): Prom
     if (io) {
       io.emit('projectStatusUpdated', { projectId: project._id, status, comments });
     }
+
+    // Persisted, per-user notifications for the project's leads/committee
+    const recipientIds = [...project.leads, ...project.committeeMembers].map((id) => id.toString());
+    const uniqueRecipientIds = [...new Set(recipientIds)];
+    await Promise.all(
+      uniqueRecipientIds.map((userId) =>
+        notifyUser(req.app, {
+          userId,
+          type: 'project_status_updated',
+          message: `Project "${project.title}" status changed to ${status}.`,
+          relatedEntity: project._id as any,
+        })
+      )
+    );
 
     res.json(project);
   } catch (error) {

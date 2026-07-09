@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
 import Minute from '../models/Minute';
 import AttendanceRecord from '../models/AttendanceRecord';
+import Event from '../models/Event';
 import { AuthRequest } from '../middlewares/auth.middleware';
-import { saveDraftSchema, paginationSchema } from '../validation/schemas';
+import { saveDraftSchema, paginationSchema, updateActionItemStatusSchema } from '../validation/schemas';
+import { notifyUser } from '../services/notification.service';
 import { z } from 'zod';
 
 export const saveDraft = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -71,17 +73,19 @@ export const approveMinutes = async (req: AuthRequest, res: Response): Promise<v
     const io = req.app.get('io');
     if (io) {
       io.emit('minutesApproved', { eventId: minute.eventId });
-      
-      // Emit notifications for action items assigned
-      minute.actionItems.forEach(item => {
-        io.emit('notification', {
+    }
+
+    // Persisted, per-assignee notifications for action items
+    await Promise.all(
+      minute.actionItems.map((item) =>
+        notifyUser(req.app, {
           userId: item.assigneeId,
           type: 'action_item_assigned',
           message: `You have been assigned a new action item: ${item.task}`,
-          link: '/my-tasks'
-        });
-      });
-    }
+          relatedEntity: minute._id as any,
+        })
+      )
+    );
 
     res.json(minute);
   } catch (error) {
@@ -123,44 +127,47 @@ export const getAllMinutes = async (req: Request, res: Response): Promise<void> 
     const filter: any = {};
     if (status) filter.status = status;
 
-    // To filter by avenue, we would need to join with Event or Project, 
-    // but a simplified version is just to filter the documents after population or 
-    // structure the schema better. For now, we'll fetch and filter if avenue is present.
-    
+    if (avenue) {
+      const avenueEvents = await Event.find({ avenue: String(avenue) }).select('_id');
+      filter.eventId = { $in: avenueEvents.map((e) => e._id) };
+    }
+
+    if (search) {
+      const searchRegex = { $regex: String(search), $options: 'i' };
+      const matchingEvents = await Event.find({ title: searchRegex }).select('_id');
+      const searchOr = [
+        { discussionNotes: searchRegex },
+        { decisions: searchRegex },
+        { eventId: { $in: matchingEvents.map((e) => e._id) } },
+      ];
+
+      if (filter.eventId) {
+        // Combine the avenue scope with the search condition
+        filter.$and = [{ eventId: filter.eventId }, { $or: searchOr }];
+        delete filter.eventId;
+      } else {
+        filter.$or = searchOr;
+      }
+    }
+
     const skip = (page - 1) * limit;
 
-    let query = Minute.find(filter)
-      .populate({
-        path: 'eventId',
-        select: 'title startTime type avenue',
-      })
-      .sort(sort || '-updatedAt');
-
-    const minutesList = await query.exec();
-    
-    // In-memory filter for search & avenue on populated fields
-    let filteredList = minutesList;
-    if (avenue) {
-      filteredList = filteredList.filter(m => (m.eventId as any)?.avenue === avenue);
-    }
-    if (search) {
-      const s = String(search).toLowerCase();
-      filteredList = filteredList.filter(m => 
-        (m.eventId as any)?.title?.toLowerCase().includes(s) ||
-        m.discussionNotes?.toLowerCase().includes(s) ||
-        m.decisions?.some(d => d.toLowerCase().includes(s))
-      );
-    }
-
-    const paginated = filteredList.slice(skip, skip + limit);
+    const [minutesList, total] = await Promise.all([
+      Minute.find(filter)
+        .populate({ path: 'eventId', select: 'title startTime type avenue' })
+        .sort(sort || '-updatedAt')
+        .skip(skip)
+        .limit(limit),
+      Minute.countDocuments(filter),
+    ]);
 
     res.json({
-      data: paginated,
+      data: minutesList,
       pagination: {
         page,
         limit,
-        total: filteredList.length,
-        totalPages: Math.ceil(filteredList.length / limit)
+        total,
+        totalPages: Math.ceil(total / limit)
       }
     });
   } catch (error) {
@@ -200,7 +207,7 @@ export const getMyActionItems = async (req: AuthRequest, res: Response): Promise
 export const updateActionItemStatus = async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const { minuteId, actionItemId } = req.params;
-        const { status } = req.body;
+        const { status } = updateActionItemStatusSchema.parse(req.body);
 
         const minute = await Minute.findOneAndUpdate(
             { _id: minuteId, 'actionItems._id': actionItemId, 'actionItems.assigneeId': req.user?._id },
@@ -215,6 +222,10 @@ export const updateActionItemStatus = async (req: AuthRequest, res: Response): P
 
         res.json({ message: 'Status updated successfully' });
     } catch (error) {
-        res.status(500).json({ message: 'Server error', error: (error as Error).message });
+        if (error instanceof z.ZodError) {
+            res.status(400).json({ message: 'Validation error', errors: error.issues });
+        } else {
+            res.status(500).json({ message: 'Server error', error: (error as Error).message });
+        }
     }
 }

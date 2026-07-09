@@ -28,4 +28,6 @@ const BookingSchema: Schema = new Schema({
   timestamps: true,
 });
 
+BookingSchema.index({ venue: 1, startTime: 1, endTime: 1 });
+
 export default mongoose.model<IBooking>('Booking', BookingSchema);

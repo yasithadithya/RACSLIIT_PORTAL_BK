@@ -13,7 +13,7 @@ export const protect = async (req: AuthRequest, res: Response, next: NextFunctio
     try {
       token = req.headers.authorization.split(' ')[1];
 
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super_secret_jwt_key_change_me_in_prod') as { id: string };
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { id: string };
 
       const user = await User.findById(decoded.id).populate('roleId').select('-passwordHash');
       

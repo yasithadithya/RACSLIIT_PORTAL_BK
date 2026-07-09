@@ -1,9 +1,10 @@
-import { Request, Response } from 'express';
+import { Request, Response, Application } from 'express';
 import jwt from 'jsonwebtoken';
 import AttendanceRecord from '../models/AttendanceRecord';
 import Event from '../models/Event';
 import User from '../models/User';
 import { AuthRequest } from '../middlewares/auth.middleware';
+import { notifyUser } from '../services/notification.service';
 
 // Generate a short-lived QR token for an event
 export const generateQRToken = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -33,7 +34,7 @@ export const generateQRToken = async (req: AuthRequest, res: Response): Promise<
 
     const token = jwt.sign(
       { eventId, type: 'attendance_qr' },
-      process.env.JWT_SECRET || 'super_secret_jwt_key_change_me_in_prod',
+      process.env.JWT_SECRET!,
       { expiresIn: expiresIn as any }
     );
 
@@ -57,7 +58,7 @@ export const checkIn = async (req: AuthRequest, res: Response): Promise<void> =>
     try {
       const decoded = jwt.verify(
         qrToken,
-        process.env.JWT_SECRET || 'super_secret_jwt_key_change_me_in_prod'
+        process.env.JWT_SECRET!
       ) as { eventId: string; type: string };
 
       if (decoded.type !== 'attendance_qr') {
@@ -75,11 +76,14 @@ export const checkIn = async (req: AuthRequest, res: Response): Promise<void> =>
         return;
       }
 
-      const record = await AttendanceRecord.create({
+      const created = await AttendanceRecord.create({
         eventId: decoded.eventId,
         userId: userId,
         method: 'qr',
       });
+
+      const record = await AttendanceRecord.findById(created._id)
+        .populate('userId', 'firstName lastName profilePhotoUrl');
 
       res.status(201).json({ message: 'Check-in successful', record });
     } catch (tokenError) {
@@ -160,42 +164,80 @@ export const getMyAttendance = async (req: AuthRequest, res: Response): Promise<
   }
 };
 
-// Get club-wide attendance summary (for dashboard)
-export const getAttendanceSummary = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    // 1. Get total past events
-    const totalEvents = await Event.countDocuments({ endTime: { $lt: new Date() } });
-    
-    // 2. Aggregate attendance counts per user
-    const attendanceCounts = await AttendanceRecord.aggregate([
-      {
-        $group: {
-          _id: '$userId',
-          attendedCount: { $sum: 1 }
-        }
+// Shared aggregation: per-active-member attendance count/percentage across all past events.
+// Used by both the dashboard summary endpoint and the min-attendance alert check.
+export const computeAttendanceSummary = async () => {
+  const totalEvents = await Event.countDocuments({ endTime: { $lt: new Date() } });
+
+  const attendanceCounts = await AttendanceRecord.aggregate([
+    {
+      $group: {
+        _id: '$userId',
+        attendedCount: { $sum: 1 }
       }
-    ]);
-    
-    // 3. Populate user info manually (aggregation doesn't auto-populate easily with Mongoose references)
-    const userIds = attendanceCounts.map(ac => ac._id);
-    const users = await User.find({ _id: { $in: userIds }, status: 'active' }).select('firstName lastName email sliitIndex avenue');
-    
-    const summary = users.map(user => {
-      const record = attendanceCounts.find(ac => ac._id.toString() === user._id.toString());
-      const attendedCount = record ? record.attendedCount : 0;
-      return {
-        user,
-        attendedCount,
-        percentage: totalEvents > 0 ? Math.round((attendedCount / totalEvents) * 100) : 0
-      };
-    });
-    
-    // Sort by percentage descending
-    summary.sort((a, b) => b.percentage - a.percentage);
+    }
+  ]);
+
+  const userIds = attendanceCounts.map(ac => ac._id);
+  const users = await User.find({ _id: { $in: userIds }, status: 'active' }).select('firstName lastName email sliitIndex avenue');
+
+  // Include active members with zero attendance too, so they show up in low-attendance alerts.
+  const allActiveUsers = await User.find({ status: 'active' }).select('firstName lastName email sliitIndex avenue');
+
+  const summary = allActiveUsers.map(user => {
+    const record = attendanceCounts.find(ac => ac._id.toString() === user._id.toString());
+    const attendedCount = record ? record.attendedCount : 0;
+    return {
+      user,
+      attendedCount,
+      percentage: totalEvents > 0 ? Math.round((attendedCount / totalEvents) * 100) : 0
+    };
+  });
+
+  summary.sort((a, b) => b.percentage - a.percentage);
+
+  return { totalEvents, memberStats: summary };
+};
+
+// Get club-wide attendance summary (for dashboard)
+export const getAttendanceSummary = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const summary = await computeAttendanceSummary();
+    res.json(summary);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: (error as Error).message });
+  }
+};
+
+// Notifies every active member below MIN_ATTENDANCE_THRESHOLD (default 70%).
+// Shared by the on-demand endpoint below and the weekly cron job (jobs/minAttendanceCheck.job.ts).
+export const runLowAttendanceCheck = async (app: Application) => {
+  const threshold = Number(process.env.MIN_ATTENDANCE_THRESHOLD) || 70;
+  const { memberStats } = await computeAttendanceSummary();
+  const belowThreshold = memberStats.filter((m) => m.percentage < threshold);
+
+  await Promise.all(
+    belowThreshold.map((m) =>
+      notifyUser(app, {
+        userId: m.user._id,
+        type: 'low_attendance',
+        message: `Your attendance is at ${m.percentage}%, below the club's ${threshold}% minimum. Please attend upcoming events.`,
+      })
+    )
+  );
+
+  return { threshold, totalChecked: memberStats.length, belowThreshold };
+};
+
+// On-demand trigger for the min-attendance alert check (also run on a weekly schedule — see jobs/scheduler.ts)
+export const checkLowAttendance = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { threshold, totalChecked, belowThreshold } = await runLowAttendanceCheck(req.app);
 
     res.json({
-      totalEvents,
-      memberStats: summary
+      message: `Checked attendance for ${totalChecked} members; ${belowThreshold.length} below ${threshold}% threshold.`,
+      threshold,
+      notified: belowThreshold.map((m) => ({ userId: m.user._id, percentage: m.percentage })),
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: (error as Error).message });

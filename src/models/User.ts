@@ -21,6 +21,7 @@ export interface IUser extends Document {
   emailVerificationExpires?: Date;
   passwordResetToken?: string;
   passwordResetExpires?: Date;
+  calendarToken?: string;
 }
 
 const UserSchema: Schema = new Schema({
@@ -44,6 +45,7 @@ const UserSchema: Schema = new Schema({
   emailVerificationExpires: { type: Date },
   passwordResetToken: { type: String },
   passwordResetExpires: { type: Date },
+  calendarToken: { type: String },
 }, {
   timestamps: true,
 });
@@ -54,5 +56,6 @@ UserSchema.index({ roleId: 1 });
 UserSchema.index({ avenue: 1 });
 UserSchema.index({ emailVerificationToken: 1 }, { sparse: true });
 UserSchema.index({ passwordResetToken: 1 }, { sparse: true });
+UserSchema.index({ calendarToken: 1 }, { sparse: true });
 
 export default mongoose.model<IUser>('User', UserSchema);

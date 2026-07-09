@@ -1,11 +1,12 @@
 import express from 'express';
-import { 
-  generateQRToken, 
-  checkIn, 
-  getEventAttendance, 
-  manualCheckIn, 
-  getMyAttendance, 
-  getAttendanceSummary 
+import {
+  generateQRToken,
+  checkIn,
+  getEventAttendance,
+  manualCheckIn,
+  getMyAttendance,
+  getAttendanceSummary,
+  checkLowAttendance,
 } from '../controllers/attendance.controller';
 import { protect } from '../middlewares/auth.middleware';
 import { requirePermission } from '../middlewares/rbac.middleware';
@@ -14,6 +15,7 @@ const router = express.Router();
 
 router.post('/check-in', protect, checkIn);
 router.post('/manual-check-in', protect, requirePermission('events', 'update'), manualCheckIn);
+router.post('/check-low-attendance', protect, requirePermission('events', 'update'), checkLowAttendance);
 
 router.get('/my-attendance', protect, getMyAttendance);
 router.get('/summary', protect, requirePermission('events', 'read'), getAttendanceSummary);

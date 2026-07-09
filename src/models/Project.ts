@@ -10,7 +10,7 @@ export interface IProject extends Document {
     estimated: number;
     actual: number;
   };
-  status: 'proposed' | 'approved' | 'ongoing' | 'completed' | 'reported';
+  status: 'proposed' | 'approved' | 'ongoing' | 'completed' | 'reported' | 'rejected' | 'cancelled';
   statusHistory: {
     status: string;
     changedBy: mongoose.Types.ObjectId;
@@ -40,10 +40,10 @@ const ProjectSchema: Schema = new Schema({
     estimated: { type: Number, default: 0 },
     actual: { type: Number, default: 0 },
   },
-  status: { 
-    type: String, 
-    enum: ['proposed', 'approved', 'ongoing', 'completed', 'reported'], 
-    default: 'proposed' 
+  status: {
+    type: String,
+    enum: ['proposed', 'approved', 'ongoing', 'completed', 'reported', 'rejected', 'cancelled'],
+    default: 'proposed'
   },
   statusHistory: [{
     status: { type: String, required: true },
@@ -65,5 +65,7 @@ const ProjectSchema: Schema = new Schema({
 }, {
   timestamps: true,
 });
+
+ProjectSchema.index({ avenue: 1, status: 1 });
 
 export default mongoose.model<IProject>('Project', ProjectSchema);

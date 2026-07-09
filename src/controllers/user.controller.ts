@@ -1,17 +1,18 @@
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import User from '../models/User';
 import Role from '../models/Role';
-import Notification from '../models/Notification';
 import { AuthRequest } from '../middlewares/auth.middleware';
-import { updateUserSchema, approveUserSchema, paginationSchema } from '../validation/schemas';
+import { updateUserSchema, approveUserSchema, paginationSchema, updateUserRoleSchema, getUsersQuerySchema } from '../validation/schemas';
 import emailService from '../services/email.service';
+import { notifyUser } from '../services/notification.service';
 import { z } from 'zod';
 
 // ========== List All Users (Admin/President) ==========
 export const getUsers = async (req: Request, res: Response): Promise<void> => {
   try {
     const { page, limit, sort } = paginationSchema.parse(req.query);
-    const { status, avenue, roleId, search } = req.query;
+    const { status, avenue, roleId, search } = getUsersQuerySchema.parse(req.query);
 
     const filter: any = {};
     if (status) filter.status = status;
@@ -119,25 +120,12 @@ export const approveUser = async (req: AuthRequest, res: Response): Promise<void
     // Send approval notification email
     await emailService.sendApprovalNotification(user.email, user.firstName);
 
-    // Create in-app notification
-    await Notification.create({
+    // Persist + push a real-time in-app notification
+    await notifyUser(req.app, {
       userId: user._id,
       type: 'membership_approved',
       message: 'Your membership has been approved! Welcome to the Rotaract Club of SLIIT.',
     });
-
-    // Emit real-time notification if user is connected
-    const io = req.app.get('io');
-    const userSockets: Map<string, string> = req.app.get('userSockets');
-    if (io && userSockets) {
-      const socketId = userSockets.get(user._id.toString());
-      if (socketId) {
-        io.to(socketId).emit('newNotification', {
-          type: 'membership_approved',
-          message: 'Your membership has been approved!',
-        });
-      }
-    }
 
     res.json({
       message: `User ${user.firstName} ${user.lastName} has been approved`,
@@ -229,8 +217,8 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
 // ========== Update User Role (Admin/President only) ==========
 export const updateUserRole = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const { roleId, avenue } = updateUserRoleSchema.parse(req.body);
     const { id } = req.params;
-    const { roleId, avenue } = req.body;
 
     const role = await Role.findById(roleId);
     if (!role) {
@@ -254,6 +242,34 @@ export const updateUserRole = async (req: AuthRequest, res: Response): Promise<v
       message: `User role updated to ${role.name}`,
       user,
     });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.issues });
+    } else {
+      res.status(500).json({ message: 'Server error', error: (error as Error).message });
+    }
+  }
+};
+
+// ========== Get/Regenerate Calendar Subscription Token ==========
+export const getMyCalendarToken = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ message: 'Not authenticated' });
+      return;
+    }
+
+    const regenerate = req.query.regenerate === 'true';
+    let { calendarToken } = req.user;
+
+    if (!calendarToken || regenerate) {
+      calendarToken = crypto.randomBytes(24).toString('hex');
+      await User.findByIdAndUpdate(req.user._id, { calendarToken });
+    }
+
+    const feedUrl = `${req.protocol}://${req.get('host')}/api/calendar/feed.ics?token=${calendarToken}`;
+
+    res.json({ token: calendarToken, feedUrl });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: (error as Error).message });
   }

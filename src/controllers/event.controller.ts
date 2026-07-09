@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 import Event from '../models/Event';
 import { AuthRequest } from '../middlewares/auth.middleware';
-import { createEventSchema, updateEventSchema, paginationSchema } from '../validation/schemas';
+import { createEventSchema, updateEventSchema, getEventsQuerySchema } from '../validation/schemas';
+import { expandRecurringEvents } from '../utils/recurrence';
 import { z } from 'zod';
 
 export const createEvent = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -38,17 +39,21 @@ export const createEvent = async (req: AuthRequest, res: Response): Promise<void
 
 export const getEvents = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { start, end, avenue, type } = req.query;
+    const { start, end, avenue, type } = getEventsQuerySchema.parse(req.query);
     const scopedAvenue = (req as any).scopedAvenue;
 
-    const filter: any = {};
-    
-    // Support FullCalendar date range fetch
+    // Non-recurring events are still filtered by date range at the DB level;
+    // recurring events are fetched regardless of their stored startTime/endTime
+    // and expanded into occurrences within [start, end] below.
+    const dateFilter: any = {};
     if (start && end) {
-      filter.startTime = { $gte: new Date(start as string) };
-      filter.endTime = { $lte: new Date(end as string) };
+      dateFilter.$or = [
+        { startTime: { $gte: new Date(start) }, endTime: { $lte: new Date(end) } },
+        { recurringRule: { $exists: true, $ne: null } },
+      ];
     }
 
+    const filter: any = { ...dateFilter };
     if (type) filter.type = type;
 
     if (scopedAvenue) {
@@ -61,9 +66,19 @@ export const getEvents = async (req: Request, res: Response): Promise<void> => {
       .populate('linkedProjectId', 'title avenue')
       .populate('createdBy', 'firstName lastName');
 
+    if (start && end) {
+      const expanded = expandRecurringEvents(events, new Date(start), new Date(end));
+      res.json(expanded);
+      return;
+    }
+
     res.json(events);
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: (error as Error).message });
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.issues });
+    } else {
+      res.status(500).json({ message: 'Server error', error: (error as Error).message });
+    }
   }
 };
 

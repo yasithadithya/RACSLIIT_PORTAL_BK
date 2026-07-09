@@ -43,6 +43,18 @@ export const approveUserSchema = z.object({
   avenue: z.string().optional(),
 });
 
+export const updateUserRoleSchema = z.object({
+  roleId: z.string().min(1, 'Role ID is required'),
+  avenue: z.string().optional(),
+});
+
+export const getUsersQuerySchema = z.object({
+  status: z.enum(['pending', 'active', 'alumni', 'rejected']).optional(),
+  avenue: z.string().optional(),
+  roleId: z.string().optional(),
+  search: z.string().optional(),
+});
+
 // ========== Project Schemas ==========
 
 export const createProjectSchema = z.object({
@@ -71,8 +83,14 @@ export const createProjectSchema = z.object({
 export const updateProjectSchema = createProjectSchema.partial();
 
 export const updateProjectStatusSchema = z.object({
-  status: z.enum(['proposed', 'approved', 'ongoing', 'completed', 'reported']),
+  status: z.enum(['proposed', 'approved', 'ongoing', 'completed', 'reported', 'rejected', 'cancelled']),
   comments: z.string().optional(),
+});
+
+export const getProjectsQuerySchema = z.object({
+  status: z.enum(['proposed', 'approved', 'ongoing', 'completed', 'reported', 'rejected', 'cancelled']).optional(),
+  avenue: z.string().optional(),
+  search: z.string().optional(),
 });
 
 // ========== Event Schemas ==========
@@ -90,6 +108,13 @@ export const createEventSchema = z.object({
 });
 
 export const updateEventSchema = createEventSchema.partial();
+
+export const getEventsQuerySchema = z.object({
+  start: z.string().optional(),
+  end: z.string().optional(),
+  avenue: z.string().optional(),
+  type: z.enum(['meeting', 'project_session', 'social']).optional(),
+});
 
 // ========== Minutes Schemas ==========
 
@@ -113,6 +138,21 @@ export const updateActionItemStatusSchema = z.object({
 // ========== Report Schemas ==========
 
 export const generateMonthlyReportSchema = z.object({
+  month: z.number().int().min(1).max(12),
+  year: z.number().int().min(2020),
+});
+
+export const generateServiceHoursReportSchema = z.object({
+  month: z.number().int().min(1).max(12),
+  year: z.number().int().min(2020),
+});
+
+export const generateMembershipReportSchema = z.object({
+  month: z.number().int().min(1).max(12),
+  year: z.number().int().min(2020),
+});
+
+export const generateFinancialReportSchema = z.object({
   month: z.number().int().min(1).max(12),
   year: z.number().int().min(2020),
 });
@@ -142,6 +182,11 @@ export const createBookingSchema = z.object({
 export const updateBookingStatusSchema = z.object({
   status: z.enum(['approved', 'rejected']),
   rejectionReason: z.string().optional(),
+});
+
+export const getBookingsQuerySchema = z.object({
+  venue: z.string().optional(),
+  status: z.enum(['pending', 'approved', 'rejected']).optional(),
 });
 
 // ========== Pagination & Query Schemas ==========

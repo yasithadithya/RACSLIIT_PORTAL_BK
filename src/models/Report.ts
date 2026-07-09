@@ -10,7 +10,11 @@ export interface IReport extends Document {
 
 const ReportSchema: Schema = new Schema({
   title: { type: String, required: true },
-  type: { type: String, enum: ['monthly_summary', 'project_report'], required: true },
+  type: {
+    type: String,
+    enum: ['monthly_summary', 'project_report', 'service_hours', 'membership', 'financial_per_avenue'],
+    required: true,
+  },
   period: { type: String, required: true }, // e.g., 'July 2026'
   generatedData: { type: Schema.Types.Mixed, required: true }, // JSON snapshot
   generatedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },

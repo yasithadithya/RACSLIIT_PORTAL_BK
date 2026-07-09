@@ -10,11 +10,11 @@ import { z } from 'zod';
 import { AuthRequest } from '../middlewares/auth.middleware';
 
 const generateAccessToken = (id: string) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET || 'super_secret_jwt_key_change_me_in_prod', { expiresIn: (process.env.JWT_EXPIRES_IN || '15m') as any });
+  return jwt.sign({ id }, process.env.JWT_SECRET!, { expiresIn: (process.env.JWT_EXPIRES_IN || '15m') as any });
 };
 
 const generateRefreshToken = (id: string) => {
-  return jwt.sign({ id, type: 'refresh' }, process.env.JWT_REFRESH_SECRET || 'super_secret_refresh_key_change_me_in_prod', { expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || '7d') as any });
+  return jwt.sign({ id, type: 'refresh' }, process.env.JWT_REFRESH_SECRET!, { expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || '7d') as any });
 };
 
 // ========== Register ==========
@@ -156,7 +156,7 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
     // Verify the refresh token
     let decoded: { id: string; type: string };
     try {
-      decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET || 'super_secret_refresh_key_change_me_in_prod') as { id: string; type: string };
+      decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET!) as { id: string; type: string };
     } catch {
       res.status(401).json({ message: 'Invalid or expired refresh token' });
       return;

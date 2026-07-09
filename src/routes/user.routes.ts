@@ -8,6 +8,7 @@ import {
   updateUser,
   updateUserRole,
   getRoles,
+  getMyCalendarToken,
 } from '../controllers/user.controller';
 import { protect } from '../middlewares/auth.middleware';
 import { requirePermission, requireRole } from '../middlewares/rbac.middleware';
@@ -16,6 +17,9 @@ const router = express.Router();
 
 // Role listing (for dropdowns in forms) — any authenticated user
 router.get('/roles', protect, getRoles);
+
+// Calendar subscription token — any authenticated user (own token only)
+router.get('/me/calendar-token', protect, getMyCalendarToken);
 
 // User management — requires 'users' resource permission
 router.get('/', protect, requirePermission('users', 'read'), getUsers);

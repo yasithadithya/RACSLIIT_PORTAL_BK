@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import connectDB from './config/db';
+import { validateEnv } from './config/validateEnv';
 import authRoutes from './routes/auth.routes';
 import userRoutes from './routes/user.routes';
 import projectRoutes from './routes/project.routes';
@@ -16,9 +17,11 @@ import reportRoutes from './routes/reports.routes';
 import bookingRoutes from './routes/booking.routes';
 import calendarRoutes from './routes/calendar.routes';
 import { authRateLimiter, apiRateLimiter } from './middlewares/rateLimit.middleware';
+import { registerScheduledJobs } from './jobs/scheduler';
 import jwt from 'jsonwebtoken';
 
 dotenv.config();
+validateEnv();
 
 const app = express();
 const httpServer = createServer(app);
@@ -64,7 +67,7 @@ io.use((socket, next) => {
   if (!token) return next(new Error('Authentication error: No token provided'));
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super_secret_jwt_key_change_me_in_prod') as any;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
     (socket as any).userId = decoded.id;
     next();
   } catch (err) {
@@ -98,6 +101,8 @@ io.on('connection', (socket) => {
 
 // Expose io to other routes
 app.set('io', io);
+
+registerScheduledJobs(app);
 
 const PORT = process.env.PORT || 5000;
 

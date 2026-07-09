@@ -1,46 +1,64 @@
 import { Request, Response } from 'express';
+import ical from 'ical-generator';
 import Event from '../models/Event';
+import User from '../models/User';
+import { expandRecurringEvents } from '../utils/recurrence';
 
 export const getCalendarIcs = async (req: Request, res: Response): Promise<void> => {
   try {
-    const events = await Event.find().sort({ startTime: 1 });
+    const token = req.query.token as string | undefined;
+    if (!token) {
+      res.status(401).json({ message: 'A calendar subscription token is required' });
+      return;
+    }
 
-    let icsContent = [
-      'BEGIN:VCALENDAR',
-      'VERSION:2.0',
-      'PRODID:-//Rotaract SLIIT//NONSGML RAC SLIIT Portal//EN',
-      'CALSCALE:GREGORIAN',
-      'METHOD:PUBLISH',
-      'X-WR-CALNAME:Rotaract SLIIT Events',
-      'X-WR-TIMEZONE:Asia/Colombo'
-    ];
+    const user = await User.findOne({ calendarToken: token }).populate('roleId');
+    if (!user) {
+      res.status(403).json({ message: 'Invalid calendar token' });
+      return;
+    }
 
-    events.forEach((event) => {
-      const dtstart = event.startTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-      const dtend = event.endTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-      const dtstamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-      const uid = `${event._id}@racsliit.org`;
+    const role: any = user.roleId;
+    const hasClubWideAccess = role?.permissions?.some(
+      (p: any) => (p.resource === 'all' || p.resource === 'events') && (p.scope === 'all')
+    );
 
-      icsContent.push(
-        'BEGIN:VEVENT',
-        `UID:${uid}`,
-        `DTSTAMP:${dtstamp}`,
-        `DTSTART:${dtstart}`,
-        `DTEND:${dtend}`,
-        `SUMMARY:${event.title}`,
-        `DESCRIPTION:${event.description || 'No description provided'}`,
-        `LOCATION:${event.location}`,
-        'END:VEVENT'
-      );
+    const filter: any = {};
+    if (!hasClubWideAccess && user.avenue) {
+      filter.avenue = user.avenue;
+    }
+
+    // Look a year back and two years forward for recurring expansion purposes;
+    // non-recurring events outside this window are still included via the base query.
+    const rangeStart = new Date();
+    rangeStart.setFullYear(rangeStart.getFullYear() - 1);
+    const rangeEnd = new Date();
+    rangeEnd.setFullYear(rangeEnd.getFullYear() + 2);
+
+    const events = await Event.find(filter).sort({ startTime: 1 });
+    const expandedEvents = expandRecurringEvents(events, rangeStart, rangeEnd);
+
+    const calendar = ical({
+      name: 'Rotaract SLIIT Events',
+      prodId: '//Rotaract SLIIT//RAC SLIIT Portal//EN',
+      timezone: 'Asia/Colombo',
     });
 
-    icsContent.push('END:VCALENDAR');
+    expandedEvents.forEach((event) => {
+      calendar.createEvent({
+        id: event.instanceId,
+        start: event.startTime,
+        end: event.endTime,
+        summary: event.title,
+        description: event.description || 'No description provided',
+        location: event.location,
+        timezone: 'Asia/Colombo',
+      });
+    });
 
-    const icsString = icsContent.join('\r\n');
-
-    res.setHeader('Content-Type', 'text/calendar');
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="racsliit_events.ics"');
-    res.send(icsString);
+    res.send(calendar.toString());
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: (error as Error).message });
   }

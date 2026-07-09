@@ -18,4 +18,6 @@ const NotificationSchema: Schema = new Schema({
   timestamps: true,
 });
 
+NotificationSchema.index({ userId: 1, read: 1 });
+
 export default mongoose.model<INotification>('Notification', NotificationSchema);
