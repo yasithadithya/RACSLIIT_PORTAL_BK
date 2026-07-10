@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: racsliit-portal-api
+    runtime: node
+    plan: free
+    region: singapore
+    # --include=dev is required because TypeScript lives in devDependencies
+    # and Render sets NODE_ENV=production before installing
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false # set in the Render dashboard (secret)
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 1d
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 7d
+      - key: FRONTEND_URL
+        sync: false # your Cloudflare Pages URL, e.g. https://racsliit-portal.pages.dev

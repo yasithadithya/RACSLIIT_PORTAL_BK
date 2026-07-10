@@ -1,9 +1,10 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
+import bcrypt from 'bcrypt';
 import User from '../models/User';
 import Role from '../models/Role';
 import { AuthRequest } from '../middlewares/auth.middleware';
-import { updateUserSchema, approveUserSchema, paginationSchema, updateUserRoleSchema, getUsersQuerySchema } from '../validation/schemas';
+import { updateUserSchema, approveUserSchema, paginationSchema, updateUserRoleSchema, getUsersQuerySchema, updateOwnProfileSchema, changePasswordSchema } from '../validation/schemas';
 import emailService from '../services/email.service';
 import { notifyUser } from '../services/notification.service';
 import { z } from 'zod';
@@ -205,6 +206,65 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     res.json(user);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.issues });
+    } else {
+      res.status(500).json({ message: 'Server error', error: (error as Error).message });
+    }
+  }
+};
+
+// ========== Update Own Profile (self-service) ==========
+export const updateMyProfile = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ message: 'Not authenticated' });
+      return;
+    }
+
+    const validatedData = updateOwnProfileSchema.parse(req.body);
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: validatedData },
+      { new: true }
+    )
+      .populate('roleId', 'name description')
+      .select('-passwordHash -refreshToken -emailVerificationToken -passwordResetToken');
+
+    res.json(user);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.issues });
+    } else {
+      res.status(500).json({ message: 'Server error', error: (error as Error).message });
+    }
+  }
+};
+
+// ========== Change Own Password (self-service) ==========
+export const changeMyPassword = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ message: 'Not authenticated' });
+      return;
+    }
+
+    const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
+
+    const user = await User.findById(req.user._id);
+    if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      res.status(400).json({ message: 'Current password is incorrect' });
+      return;
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.passwordHash = await bcrypt.hash(newPassword, salt);
+    user.refreshToken = undefined; // Invalidate existing sessions — must log in again
+    await user.save();
+
+    res.json({ message: 'Password changed successfully. Please log in again.' });
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ message: 'Validation error', errors: error.issues });

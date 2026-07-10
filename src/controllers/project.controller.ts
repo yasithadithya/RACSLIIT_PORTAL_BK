@@ -1,18 +1,33 @@
 import { Request, Response } from 'express';
 import Project from '../models/Project';
 import { AuthRequest } from '../middlewares/auth.middleware';
-import { createProjectSchema, updateProjectSchema, updateProjectStatusSchema, paginationSchema, getProjectsQuerySchema } from '../validation/schemas';
+import { createProjectSchema, updateProjectSchema, updateProjectStatusSchema, approveProjectSchema, rejectProjectSchema, paginationSchema, getProjectsQuerySchema } from '../validation/schemas';
 import { notifyUser } from '../services/notification.service';
 import { z } from 'zod';
 
+// Accepting or rejecting a *proposal* (proposed → approved/rejected) is handled by the
+// dedicated approveProject/rejectProject endpoints, which are restricted to the club's
+// senior officers. The generic status endpoint below therefore only advances a project
+// through its lifecycle *after* acceptance.
 const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
-  proposed: ['approved', 'rejected', 'cancelled'],
-  approved: ['ongoing', 'rejected', 'cancelled'],
+  proposed: ['cancelled'],
+  approved: ['ongoing', 'cancelled'],
   ongoing: ['completed', 'cancelled'],
   completed: ['reported'],
   reported: [],
   rejected: [],
   cancelled: [],
+};
+
+// Collects the unique set of user IDs who should hear about a project decision:
+// its leads, committee members, and the original proposer (first status-history entry).
+const getProjectStakeholderIds = (project: any): string[] => {
+  const ids = [...project.leads, ...project.committeeMembers].map((id: any) => id.toString());
+  const proposal = project.statusHistory?.[0];
+  if (proposal?.changedBy) {
+    ids.push(proposal.changedBy.toString());
+  }
+  return [...new Set(ids)];
 };
 
 export const createProject = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -35,6 +50,7 @@ export const createProject = async (req: AuthRequest, res: Response): Promise<vo
       statusHistory: [{
         status: 'proposed',
         changedBy: req.user?._id,
+        changedAt: new Date(),
         comments: 'Initial proposal'
       }]
     });
@@ -223,15 +239,128 @@ export const updateProjectStatus = async (req: AuthRequest, res: Response): Prom
       io.emit('projectStatusUpdated', { projectId: project._id, status, comments });
     }
 
-    // Persisted, per-user notifications for the project's leads/committee
-    const recipientIds = [...project.leads, ...project.committeeMembers].map((id) => id.toString());
-    const uniqueRecipientIds = [...new Set(recipientIds)];
+    // Persisted, per-user notifications for the project's stakeholders
     await Promise.all(
-      uniqueRecipientIds.map((userId) =>
+      getProjectStakeholderIds(project).map((userId) =>
         notifyUser(req.app, {
           userId,
           type: 'project_status_updated',
           message: `Project "${project.title}" status changed to ${status}.`,
+          relatedEntity: project._id as any,
+        })
+      )
+    );
+
+    res.json(project);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.issues });
+    } else {
+      res.status(500).json({ message: 'Server error', error: (error as Error).message });
+    }
+  }
+};
+
+// ========== Proposal Approval Workflow ==========
+// Accept a proposed project. Restricted (at the route level) to President, Vice President,
+// Secretary and Treasurer. A proposed-budget attachment link is mandatory before a
+// project can be accepted — it may already be on the proposal or supplied at approval time.
+export const approveProject = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { budgetProposalUrl, comments } = approveProjectSchema.parse(req.body);
+
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      res.status(404).json({ message: 'Project not found' });
+      return;
+    }
+
+    if (project.status !== 'proposed') {
+      res.status(400).json({ message: `Only proposed projects can be approved (current status: ${project.status}).` });
+      return;
+    }
+
+    // Enforce the mandatory budget attachment link.
+    const budgetLink = budgetProposalUrl || project.budgetProposalUrl;
+    if (!budgetLink) {
+      res.status(400).json({ message: 'A proposed budget attachment link is required to approve this project.' });
+      return;
+    }
+    project.budgetProposalUrl = budgetLink;
+
+    project.status = 'approved';
+    project.statusHistory.push({
+      status: 'approved',
+      changedBy: req.user?._id as any,
+      changedAt: new Date(),
+      comments,
+    });
+
+    await project.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('projectStatusUpdated', { projectId: project._id, status: 'approved', comments });
+    }
+
+    await Promise.all(
+      getProjectStakeholderIds(project).map((userId) =>
+        notifyUser(req.app, {
+          userId,
+          type: 'project_approved',
+          message: `Project "${project.title}" has been approved.`,
+          relatedEntity: project._id as any,
+        })
+      )
+    );
+
+    res.json(project);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.issues });
+    } else {
+      res.status(500).json({ message: 'Server error', error: (error as Error).message });
+    }
+  }
+};
+
+// Reject a proposed project. Same officer-only restriction as approveProject.
+export const rejectProject = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { comments } = rejectProjectSchema.parse(req.body);
+
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      res.status(404).json({ message: 'Project not found' });
+      return;
+    }
+
+    if (project.status !== 'proposed') {
+      res.status(400).json({ message: `Only proposed projects can be rejected (current status: ${project.status}).` });
+      return;
+    }
+
+    project.status = 'rejected';
+    project.statusHistory.push({
+      status: 'rejected',
+      changedBy: req.user?._id as any,
+      changedAt: new Date(),
+      comments,
+    });
+
+    await project.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('projectStatusUpdated', { projectId: project._id, status: 'rejected', comments });
+    }
+
+    await Promise.all(
+      getProjectStakeholderIds(project).map((userId) =>
+        notifyUser(req.app, {
+          userId,
+          type: 'project_rejected',
+          message: `Project "${project.title}" was not approved.${comments ? ` Reason: ${comments}` : ''}`,
           relatedEntity: project._id as any,
         })
       )

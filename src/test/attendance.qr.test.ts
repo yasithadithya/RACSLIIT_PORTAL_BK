@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
 import { Response } from 'express';
-import { generateQRToken, checkIn } from '../controllers/attendance.controller';
+import { generateQRToken, checkIn, scanMemberQr } from '../controllers/attendance.controller';
 import { AuthRequest } from '../middlewares/auth.middleware';
 import Event from '../models/Event';
 import User from '../models/User';
@@ -141,6 +141,62 @@ describe('attendance.controller checkIn', () => {
     expect(res2.status).toHaveBeenCalledWith(400);
     const records = await AttendanceRecord.find({ eventId: event.id, userId: user.id });
     expect(records.length).toBe(1);
+  });
+
+  it('marks attendance by scanning a member QR containing the SLIIT index', async () => {
+    const event = await createEvent(0);
+    const member = await createUser();
+    const organizer = await createUser();
+
+    const req = {
+      body: { eventId: event.id, qrToken: member.sliitIndex },
+      user: organizer,
+      app: { get: () => undefined },
+    } as unknown as AuthRequest;
+    const res = makeRes();
+
+    await scanMemberQr(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(201);
+    const record = await AttendanceRecord.findOne({ eventId: event.id, userId: member.id });
+    expect(record).not.toBeNull();
+    expect(record?.method).toBe('qr');
+  });
+
+  it('still accepts a legacy JWT member QR code', async () => {
+    const event = await createEvent(0);
+    const member = await createUser();
+    const organizer = await createUser();
+    const legacyToken = jwt.sign({ userId: member.id, type: 'member_qr' }, process.env.JWT_SECRET!);
+
+    const req = {
+      body: { eventId: event.id, qrToken: legacyToken },
+      user: organizer,
+      app: { get: () => undefined },
+    } as unknown as AuthRequest;
+    const res = makeRes();
+
+    await scanMemberQr(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(201);
+    const record = await AttendanceRecord.findOne({ eventId: event.id, userId: member.id });
+    expect(record).not.toBeNull();
+  });
+
+  it('returns 404 when the scanned index does not match any member', async () => {
+    const event = await createEvent(0);
+    const organizer = await createUser();
+
+    const req = {
+      body: { eventId: event.id, qrToken: 'IT00000000' },
+      user: organizer,
+      app: { get: () => undefined },
+    } as unknown as AuthRequest;
+    const res = makeRes();
+
+    await scanMemberQr(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 
   it('enforces the duplicate check-in guard at the database level via the unique index', async () => {

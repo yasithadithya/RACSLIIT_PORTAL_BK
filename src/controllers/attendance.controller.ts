@@ -1,4 +1,5 @@
 import { Request, Response, Application } from 'express';
+import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 import AttendanceRecord from '../models/AttendanceRecord';
 import Event from '../models/Event';
@@ -89,6 +90,89 @@ export const checkIn = async (req: AuthRequest, res: Response): Promise<void> =>
     } catch (tokenError) {
       res.status(400).json({ message: 'Invalid or expired QR code' });
     }
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: (error as Error).message });
+  }
+};
+
+// Get the current user's personal identity QR payload. The QR simply encodes the
+// member's SLIIT index number (unique per student) — a short payload keeps the QR
+// sparse and easy to scan, unlike the previous JWT-based codes.
+export const getMyQrToken = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ message: 'Not authenticated' });
+      return;
+    }
+
+    res.json({ token: req.user.sliitIndex });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: (error as Error).message });
+  }
+};
+
+// Organizer scans a member's personal QR code to mark that member's attendance
+// for a specific event/meeting/project session.
+export const scanMemberQr = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { eventId, qrToken } = req.body;
+
+    if (!eventId || !qrToken) {
+      res.status(400).json({ message: 'Event ID and QR token are required' });
+      return;
+    }
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+      res.status(404).json({ message: 'Event not found' });
+      return;
+    }
+
+    // Member QRs now encode the SLIIT index directly. Older downloaded QRs contain a
+    // signed JWT ({ userId, type: 'member_qr' }) — accept those too so saved codes keep working.
+    let member = null;
+    try {
+      const decoded = jwt.verify(qrToken, process.env.JWT_SECRET!) as { userId: string; type: string };
+      if (decoded.type !== 'member_qr') {
+        res.status(400).json({ message: 'This QR code is not a member attendance code' });
+        return;
+      }
+      member = await User.findById(decoded.userId);
+    } catch {
+      const sliitIndex = String(qrToken).trim();
+      member = await User.findOne({ sliitIndex: { $regex: `^${sliitIndex.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } });
+    }
+
+    if (!member) {
+      res.status(404).json({ message: 'Member not found' });
+      return;
+    }
+
+    const memberId = member._id as mongoose.Types.ObjectId;
+
+    const existingRecord = await AttendanceRecord.findOne({ eventId, userId: memberId });
+    if (existingRecord) {
+      res.status(400).json({ message: `${member.firstName} ${member.lastName} is already checked in` });
+      return;
+    }
+
+    const created = await AttendanceRecord.create({
+      eventId,
+      userId: memberId,
+      method: 'qr',
+      verifiedBy: req.user?._id,
+    });
+
+    const record = await AttendanceRecord.findById(created._id)
+      .populate('userId', 'firstName lastName sliitIndex profilePhotoUrl');
+
+    notifyUser(req.app, {
+      userId: memberId,
+      type: 'attendance_marked',
+      message: `Your attendance was marked for "${event.title}".`,
+    }).catch(() => {});
+
+    res.status(201).json({ message: 'Attendance marked successfully', record });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: (error as Error).message });
   }

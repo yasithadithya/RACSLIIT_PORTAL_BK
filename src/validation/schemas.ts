@@ -38,6 +38,17 @@ export const updateUserSchema = z.object({
   profilePhotoUrl: z.string().url().optional().or(z.literal('')),
 });
 
+export const updateOwnProfileSchema = z.object({
+  firstName: z.string().min(2).optional(),
+  lastName: z.string().min(2).optional(),
+  contactNumber: z.string().min(9).optional(),
+});
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required'),
+  newPassword: z.string().min(6, 'New password must be at least 6 characters'),
+});
+
 export const approveUserSchema = z.object({
   roleId: z.string().min(1, 'Role ID is required'),
   avenue: z.string().optional(),
@@ -67,6 +78,7 @@ export const createProjectSchema = z.object({
     estimated: z.number().min(0).default(0),
     actual: z.number().min(0).default(0),
   }).optional().default({ estimated: 0, actual: 0 }),
+  budgetProposalUrl: z.string().url('Budget attachment must be a valid link').optional(),
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
   targetBeneficiaries: z.string().optional(),
@@ -84,6 +96,17 @@ export const updateProjectSchema = createProjectSchema.partial();
 
 export const updateProjectStatusSchema = z.object({
   status: z.enum(['proposed', 'approved', 'ongoing', 'completed', 'reported', 'rejected', 'cancelled']),
+  comments: z.string().optional(),
+});
+
+// Approving a proposal: the approver may supply the mandatory budget attachment link
+// here if the proposer didn't include one on the project itself.
+export const approveProjectSchema = z.object({
+  budgetProposalUrl: z.string().url('Budget attachment must be a valid link').optional(),
+  comments: z.string().optional(),
+});
+
+export const rejectProjectSchema = z.object({
   comments: z.string().optional(),
 });
 

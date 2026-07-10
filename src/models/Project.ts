@@ -10,6 +10,9 @@ export interface IProject extends Document {
     estimated: number;
     actual: number;
   };
+  // Link to the proposed-budget document (Drive/Sheets/PDF, etc.). Mandatory before a
+  // proposal can be approved — see approveProject in the project controller.
+  budgetProposalUrl?: string;
   status: 'proposed' | 'approved' | 'ongoing' | 'completed' | 'reported' | 'rejected' | 'cancelled';
   statusHistory: {
     status: string;
@@ -40,6 +43,7 @@ const ProjectSchema: Schema = new Schema({
     estimated: { type: Number, default: 0 },
     actual: { type: Number, default: 0 },
   },
+  budgetProposalUrl: { type: String },
   status: {
     type: String,
     enum: ['proposed', 'approved', 'ongoing', 'completed', 'reported', 'rejected', 'cancelled'],

@@ -25,17 +25,28 @@ validateEnv();
 
 const app = express();
 const httpServer = createServer(app);
+
+// FRONTEND_URL supports a comma-separated list (e.g. production + preview URLs)
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: allowedOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   },
 });
 
+// Running behind Render's reverse proxy — needed for express-rate-limit
+// and req.ip to see the real client IP from X-Forwarded-For
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: allowedOrigins,
   credentials: true,
 }));
 app.use(express.json());

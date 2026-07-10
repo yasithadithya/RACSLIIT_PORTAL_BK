@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import User from '../models/User';
 import Role from '../models/Role';
 import emailService from '../services/email.service';
+import { notifyUsersExcludingRoles } from '../services/notification.service';
 import { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema } from '../validation/schemas';
 import { z } from 'zod';
 import { AuthRequest } from '../middlewares/auth.middleware';
@@ -66,6 +67,15 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
     // Send verification email
     await emailService.sendVerificationEmail(user.email, emailVerificationToken);
+
+    // Alert board/executive members about the new registration. Fire-and-forget so a
+    // notification failure never blocks the registration response.
+    notifyUsersExcludingRoles(req.app, {
+      excludeRoles: ['General Member', 'Committee member', 'Prospective member', 'Guest'],
+      type: 'new_registration',
+      message: `New registration: ${user.firstName} ${user.lastName} (${user.sliitIndex}) is awaiting approval.`,
+      relatedEntity: user.id,
+    }).catch(() => {});
 
     res.status(201).json({
       _id: user._id,

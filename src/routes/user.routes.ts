@@ -9,6 +9,8 @@ import {
   updateUserRole,
   getRoles,
   getMyCalendarToken,
+  updateMyProfile,
+  changeMyPassword,
 } from '../controllers/user.controller';
 import { protect } from '../middlewares/auth.middleware';
 import { requirePermission, requireRole } from '../middlewares/rbac.middleware';
@@ -20,6 +22,10 @@ router.get('/roles', protect, getRoles);
 
 // Calendar subscription token — any authenticated user (own token only)
 router.get('/me/calendar-token', protect, getMyCalendarToken);
+
+// Self-service profile — any authenticated user (own record only)
+router.patch('/me', protect, updateMyProfile);
+router.patch('/me/password', protect, changeMyPassword);
 
 // User management — requires 'users' resource permission
 router.get('/', protect, requirePermission('users', 'read'), getUsers);

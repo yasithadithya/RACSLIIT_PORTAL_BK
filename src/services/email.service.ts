@@ -14,6 +14,11 @@ interface EmailOptions {
   text?: string;
 }
 
+// FRONTEND_URL may be a comma-separated list of allowed origins;
+// email links always point at the first (primary) URL.
+const getFrontendUrl = (): string =>
+  (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
+
 class EmailService {
   private provider: 'console' | 'resend' | 'sendgrid';
 
@@ -71,7 +76,7 @@ class EmailService {
   // --- Convenience methods for common email types ---
 
   async sendVerificationEmail(to: string, token: string): Promise<boolean> {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = getFrontendUrl();
     const verifyUrl = `${frontendUrl}/verify-email?token=${token}`;
 
     return this.send({
@@ -91,7 +96,7 @@ class EmailService {
   }
 
   async sendPasswordResetEmail(to: string, token: string): Promise<boolean> {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = getFrontendUrl();
     const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
 
     return this.send({
@@ -118,10 +123,10 @@ class EmailService {
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #9e1b32;">Welcome aboard, ${firstName}! 🎉</h2>
           <p>Your membership in the Rotaract Club of SLIIT has been approved. You can now log in and access the portal.</p>
-          <p><a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/login" style="display: inline-block; background: #9e1b32; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none;">Login Now</a></p>
+          <p><a href="${getFrontendUrl()}/login" style="display: inline-block; background: #9e1b32; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none;">Login Now</a></p>
         </div>
       `,
-      text: `Welcome aboard, ${firstName}! Your membership has been approved. Login at ${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`,
+      text: `Welcome aboard, ${firstName}! Your membership has been approved. Login at ${getFrontendUrl()}/login`,
     });
   }
 
