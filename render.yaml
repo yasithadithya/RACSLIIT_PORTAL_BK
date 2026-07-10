@@ -4,9 +4,9 @@ services:
     runtime: node
     plan: free
     region: singapore
-    # --include=dev is required because TypeScript lives in devDependencies
-    # and Render sets NODE_ENV=production before installing
-    buildCommand: npm ci --include=dev && npm run build
+    # typescript and @types/* live in "dependencies" so the build works
+    # even though Render installs with NODE_ENV=production
+    buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
